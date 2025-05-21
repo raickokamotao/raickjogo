@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Ratinho Maneiro vs Gatos Raivosos</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+  * {
+    box-sizing: border-box;
+  }
+  body, html {
+    margin: 0; padding: 0;
+    height: 100%;
+    background: linear-gradient(135deg, #222831, #393e46);
+    font-family: 'Press Start 2P', cursive;
+    user-select: none;
+    overflow: hidden;
+    color: #eeeeee;
+  }
+  #gameContainer {
+    width: 100vw;
+    height: 100vh;
+    position: relative;
+    overflow: hidden;
+    background: linear-gradient(to bottom, #00adb5 0%, #222831 100%);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+  }
+  canvas {
+    background: linear-gradient(to bottom, #393e46 0%, #222831 100%);
+    display: block;
+    border-radius: 20px;
+    box-shadow: 0 0 30px #00ffe7aa inset;
+  }
+  #score {
+    position: absolute;
+    top: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 24px;
+    font-weight: bold;
+    text-shadow: 0 0 8px #00ffe7bb;
+    user-select: none;
+    z-index: 50;
+  }
+  #message {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: #222831cc;
+    padding: 30px 50px;
+    border-radius: 25px;
+    box-shadow: 0 0 30px #00adb5cc;
+    font-size: 26px;
+    font-weight: bold;
+    text-align: center;
+    cursor: pointer;
+    user-select: none;
+    z-index: 60;
+  }
+</style>
+</head>
+<body>
+<div id="gameContainer">
+  <canvas id="gameCanvas" width="480" height="640"></canvas>
+  <div id="score">Pontuação: 0</div>
+  <div id="message">Clique ou pressione espaço para iniciar<br>Use ↑ ↓ para mover o ratinho maneiro</div>
+</div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('gameCanvas');
+  const ctx = canvas.getContext('2d');
+  const scoreEl = document.getElementById('score');
+  const messageEl = document.getElementById('message');
+
+  const WIDTH = canvas.width;
+  const HEIGHT = canvas.height;
+
+  // Game variables
+  let gameRunning = false;
+  let score = 0;
+  const baseSpeed = 5;
+  let speed = baseSpeed;
+
+  // Lanes (3 tracks)
+  const lanes = [HEIGHT / 4, HEIGHT / 2, (3 * HEIGHT) / 4];
+  const laneIndexes = [0, 1, 2];
+
+  // Player (ratinho maneiro)
+  const player = {
+    width: 52,
+    height: 45,
+    x: 80,
+    lane: 1,
+    y: lanes[1] - 45/2,
+    spriteToggle: false,
+    spriteToggleInterval: 150, // ms
+    lastToggleTime: 0,
+  };
+
+  // Obstacles (gatos raivosos)
+  const obstacles = [];
+  const obstacleWidth = 56;
+  const obstacleHeight = 50;
+  let obstacleSpawnTimer = 0;
+  const obstacleSpawnInterval = 1300; // ms
+
+  // Load sprites
+  const playerSprite1 = new Image();
+  const playerSprite2 = new Image();
+  const angryCatSprite = new Image();
+
+  // Imagens de rato maneiro animado e gato raivoso
+  // Fonte das imagens: imagens transparentes png confiáveis via rawgit do GitHub e imgur
+  // Rato maneiro: dois frames alternados para animação
+  playerSprite1.src = 'https://raw.githubusercontent.com/jcubic/static-assets/main/mouse1.png';
+  playerSprite2.src = 'https://raw.githubusercontent.com/jcubic/static-assets/main/mouse2.png';
+  // Gato raivoso: imagem única
+  angryCatSprite.src = 'https://raw.githubusercontent.com/jcubic/static-assets/main/angry_cat.png';
+
+  // Input handling
+  const keys = {};
+  window.addEventListener('keydown', (e) => {
+    keys[e.key] = true;
+    if (
+      !gameRunning &&
+      (e.key === ' ' || e.key === 'ArrowUp' || e.key === 'ArrowDown')
+    ) {
+      startGame();
+    }
+    e.preventDefault();
+  });
+  window.addEventListener('keyup', (e) => {
+    keys[e.key] = false;
+    e.preventDefault();
+  });
+
+  // Mouse/touch start
+  canvas.addEventListener('mousedown', () => {
+    if (!gameRunning) startGame();
+  });
+  canvas.addEventListener(
+    'touchstart',
+    (e) => {
+      e.preventDefault();
+      if (!gameRunning) startGame();
+    },
+    { passive: false }
+  );
+
+  function startGame() {
+    gameRunning = true;
+    messageEl.style.display = 'none';
+    score = 0;
+    speed = baseSpeed;
+    obstacles.length = 0;
+    player.lane = 1;
+    player.y = lanes[1] - player.height / 2;
+    lastTime = performance.now();
+    obstacleSpawnTimer = 0;
+    requestAnimationFrame(gameLoop);
+  }
+
+  function endGame() {
+    gameRunning = false;
+    messageEl.innerHTML = `Fim de jogo!<br>Pontuação final: ${score}<br>Clique ou pressione espaço para jogar novamente`;
+    messageEl.style.display = 'block';
+  }
+
+  // Collision detection: AABB
+  function isColliding(rect1, rect2) {
+    return (
+      rect1.x < rect2.x + rect2.width &&
+      rect1.x + rect1.width > rect2.x &&
+      rect1.y < rect2.y + rect2.height &&
+      rect1.y + rect1.height > rect2.y
+    );
+  }
+
+  let lastTime = performance.now();
+
+  function update(delta) {
+    // Player lane movement
+    if (keys['ArrowUp']) {
+      if (player.lane > 0) {
+        player.lane--;
+        player.y = lanes[player.lane] - player.height / 2;
+        keys['ArrowUp'] = false;
+      }
+    }
+    if (keys['ArrowDown']) {
+      if (player.lane < lanes.length - 1) {
+        player.lane++;
+        player.y = lanes[player.lane] - player.height / 2;
+        keys['ArrowDown'] = false;
+      }
+    }
+
+    // Spawn obstacles: 1 or 2 in different lanes
+    obstacleSpawnTimer += delta;
+    if (obstacleSpawnTimer > obstacleSpawnInterval) {
+      obstacleSpawnTimer = 0;
+      const numObstacles = Math.floor(Math.random() * 2) + 1;
+      const lanesAvailable = [...laneIndexes];
+      for (let i = 0; i < numObstacles; i++) {
+        if (lanesAvailable.length === 0) break;
+        const laneIdx = lanesAvailable.splice(Math.floor(Math.random() * lanesAvailable.length), 1)[0];
+        obstacles.push({
+          x: WIDTH + obstacleWidth,
+          y: lanes[laneIdx] - obstacleHeight / 2,
+          width: obstacleWidth,
+          height: obstacleHeight,
+        });
+      }
+    }
+
+    // Move obstacles
+    for (let i = obstacles.length - 1; i >= 0; i--) {
+      const o = obstacles[i];
+      o.x -= speed;
+      if (o.x + o.width < 0) {
+        obstacles.splice(i, 1);
+        score++;
+        // Increase speed gradually
+        speed = baseSpeed + Math.floor(score / 5) * 0.8;
+      }
+    }
+
+    // Check collisions
+    const playerRect = {
+      x: player.x,
+      y: player.y,
+      width: player.width,
+      height: player.height,
+    };
+    for (const o of obstacles) {
+      if (isColliding(playerRect, o)) {
+        endGame();
+        break;
+      }
+    }
+
+    // Animate player sprite toggle
+    player.lastToggleTime += delta;
+    if (player.lastToggleTime > player.spriteToggleInterval) {
+      player.spriteToggle = !player.spriteToggle;
+      player.lastToggleTime = 0;
+    }
+  }
+
+  function draw() {
+    ctx.clearRect(0, 0, WIDTH, HEIGHT);
+
+    // Background stripes (stylish dark teal stripes)
+    const grassHeight = HEIGHT;
+    const stripeWidth = 30;
+    for (let x = 0; x < WIDTH; x += stripeWidth * 2) {
+      ctx.fillStyle = '#007c91';
+      ctx.fillRect(x, 0, stripeWidth, grassHeight);
+      ctx.fillStyle = '#00a5ba';
+      ctx.fillRect(x + stripeWidth, 0, stripeWidth, grassHeight);
+    }
+
+    // Draw lane lines with glowing effect
+    ctx.strokeStyle = '#00ffe7cc';
+    ctx.lineWidth = 4;
+    ctx.shadowColor = '#00ffe7ee';
+    ctx.shadowBlur = 10;
+    ctx.setLineDash([18, 24]);
+    for (let i = 1; i < lanes.length; i++) {
+      ctx.beginPath();
+      ctx.moveTo(0, lanes[i]);
+      ctx.lineTo(WIDTH, lanes[i]);
+      ctx.stroke();
+    }
+    ctx.shadowBlur = 0;
+    ctx.setLineDash([]);
+
+    // Draw player - ratinho maneiro
+    if (
+      playerSprite1.complete &&
+      playerSprite2.complete &&
+      playerSprite1.naturalWidth !== 0 &&
+      playerSprite2.naturalWidth !== 0
+    ) {
+      const sprite = player.spriteToggle ? playerSprite1 : playerSprite2;
+      ctx.drawImage(sprite, player.x, player.y, player.width, player.height);
+    } else {
+      // fallback: cool blue rounded rectangle
+      ctx.fillStyle = '#00ffe7';
+      ctx.shadowColor = '#00d2c9';
+      ctx.shadowBlur = 12;
+      ctx.beginPath();
+      ctx.moveTo(player.x + 15, player.y);
+      ctx.lineTo(player.x + player.width - 15, player.y);
+      ctx.quadraticCurveTo(player.x + player.width, player.y, player.x + player.width, player.y + 15);
+      ctx.lineTo(player.x + player.width, player.y + player.height - 15);
+      ctx.quadraticCurveTo(player.x + player.width, player.y + player.height, player.x + player.width - 15, player.y + player.height);
+      ctx.lineTo(player.x + 15, player.y + player.height);
+      ctx.quadraticCurveTo(player.x, player.y + player.height, player.x, player.y + player.height - 15);
+      ctx.lineTo(player.x, player.y + 15);
+      ctx.quadraticCurveTo(player.x, player.y, player.x + 15, player.y);
+      ctx.closePath();
+      ctx.fill();
+      ctx.shadowBlur = 0;
+    }
+
+    // Draw obstacles - gatos raivosos
+    for (const o of obstacles) {
+      if (angryCatSprite.complete && angryCatSprite.naturalWidth !== 0) {
+        ctx.drawImage(angryCatSprite, o.x, o.y, o.width, o.height);
+      } else {
+        // fallback: red glowing shape
+        ctx.fillStyle = '#d32f2f';
+        ctx.shadowColor = '#a80000';
+        ctx.shadowBlur = 10;
+        ctx.beginPath();
+        ctx.moveTo(o.x + 14, o.y);
+        ctx.lineTo(o.x + o.width - 14, o.y);
+        ctx.quadraticCurveTo(o.x + o.width, o.y, o.x + o.width, o.y + 14);
+        ctx.lineTo(o.x + o.width, o.y + o.height - 14);
+        ctx.quadraticCurveTo(o.x + o.width, o.y + o.height, o.x + o.width - 14, o.y + o.height);
+        ctx.lineTo(o.x + 14, o.y + o.height);
+        ctx.quadraticCurveTo(o.x, o.y + o.height, o.x, o.y + o.height - 14);
+        ctx.lineTo(o.x, o.y + 14);
+        ctx.quadraticCurveTo(o.x, o.y, o.x + 14, o.y);
+        ctx.closePath();
+        ctx.fill();
+        ctx.shadowBlur = 0;
+      }
+    }
+  }
+
+  function gameLoop(timestamp) {
+    if (!lastTime) lastTime = timestamp;
+    const delta = timestamp - lastTime;
+    lastTime = timestamp;
+
+    if (!gameRunning) {
+      return;
+    }
+
+    update(delta);
+    draw();
+
+    scoreEl.textContent = 'Pontuação: ' + score;
+
+    requestAnimationFrame(gameLoop);
+  }
+
+  // Initial draw with message
+  draw();
+})();
+</script>
+</body>
+</html>
+
